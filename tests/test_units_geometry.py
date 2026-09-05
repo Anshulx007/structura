@@ -20,12 +20,30 @@ def test_si_system_is_the_identity() -> None:
         assert SI.length_to_si(value) == value
         assert SI.moment_to_si(value) == value
         assert SI.stress_to_si(value) == value
+        assert SI.modulus_to_si(value) == value
 
 
-def test_default_display_units_are_kn_m_gpa() -> None:
+def test_default_display_units() -> None:
     assert DEFAULT.force_to_si(10.0) == pytest.approx(10_000.0)
-    assert DEFAULT.stress_to_si(200.0) == pytest.approx(2.0e11)
     assert DEFAULT.length_to_si(6.0) == pytest.approx(6.0)
+    assert DEFAULT.modulus_to_si(200.0) == pytest.approx(2.0e11), "E reads in GPa"
+    assert DEFAULT.stress_to_si(250.0) == pytest.approx(2.5e8), "member stress reads in MPa"
+
+
+def test_modulus_and_stress_are_separate_units() -> None:
+    """Same dimension, but 200 GPa and 250 MPa are how each is actually read.
+
+    Sharing one field forces either E to display as 200000 MPa or a member stress as
+    0.00025 GPa, and both are unreadable where they appear.
+    """
+    assert DEFAULT.modulus != DEFAULT.stress
+    assert DEFAULT.modulus_from_si(2.0e11) == pytest.approx(200.0)
+    assert DEFAULT.stress_from_si(2.5e8) == pytest.approx(250.0)
+
+
+def test_unknown_modulus_unit_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown modulus"):
+        UnitSystem(modulus="bar")
 
 
 def test_moment_and_distributed_units_derive_from_force_and_length() -> None:

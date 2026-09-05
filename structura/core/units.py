@@ -51,7 +51,14 @@ class UnitSystem:
 
     length: str = "m"
     force: str = "kN"
-    stress: str = "GPa"
+    stress: str = "MPa"
+    """Unit for computed stresses. Engineers read member stress in MPa, not GPa."""
+    modulus: str = "GPa"
+    """Unit for elastic modulus. Same dimension as stress, but conventionally reported in GPa.
+
+    Kept separate deliberately: sharing one field makes either E read as 200000 MPa or a member
+    stress read as -0.0125 GPa, and both are unreadable in the place they actually appear.
+    """
     angle_in_degrees: bool = True
 
     def __post_init__(self) -> None:
@@ -61,6 +68,8 @@ class UnitSystem:
             raise ValueError(f"Unknown force unit {self.force!r}")
         if self.stress not in STRESS_FACTORS:
             raise ValueError(f"Unknown stress unit {self.stress!r}")
+        if self.modulus not in STRESS_FACTORS:
+            raise ValueError(f"Unknown modulus unit {self.modulus!r}")
 
     # -- factors -------------------------------------------------------------
 
@@ -75,6 +84,10 @@ class UnitSystem:
     @property
     def stress_factor(self) -> float:
         return STRESS_FACTORS[self.stress]
+
+    @property
+    def modulus_factor(self) -> float:
+        return STRESS_FACTORS[self.modulus]
 
     @property
     def moment_factor(self) -> float:
@@ -125,6 +138,12 @@ class UnitSystem:
     def stress_from_si(self, value: float) -> float:
         return value / self.stress_factor
 
+    def modulus_to_si(self, value: float) -> float:
+        return value * self.modulus_factor
+
+    def modulus_from_si(self, value: float) -> float:
+        return value / self.modulus_factor
+
     def angle_from_si(self, radians: float) -> float:
         return math.degrees(radians) if self.angle_in_degrees else radians
 
@@ -149,6 +168,7 @@ class UnitSystem:
             "force": self.force,
             "moment": self.moment_unit,
             "stress": self.stress,
+            "modulus": self.modulus,
         }
 
     @classmethod
@@ -157,12 +177,13 @@ class UnitSystem:
         return cls(
             length=data.get("length", "m"),
             force=data.get("force", "kN"),
-            stress=data.get("stress", "GPa"),
+            stress=data.get("stress", "MPa"),
+            modulus=data.get("modulus", "GPa"),
         )
 
 
-SI = UnitSystem(length="m", force="N", stress="Pa")
+SI = UnitSystem(length="m", force="N", stress="Pa", modulus="Pa")
 """The solver's own unit system — the identity conversion. Useful in tests."""
 
 DEFAULT = UnitSystem()
-"""What the GUI starts with: metres, kilonewtons, gigapascals."""
+"""What the GUI starts with: metres, kilonewtons, MPa stress, GPa modulus."""
