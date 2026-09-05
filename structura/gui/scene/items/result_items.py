@@ -89,7 +89,6 @@ COLOUR_LEGEND_BORDER = QColor(196, 202, 209)
 
 BAND_WIDTH_PX = 9.0
 BAND_ALPHA = 205
-BAND_MARGIN_SCENE = 14.0
 """Scene-unit padding on the band's bounding rect.
 
 The band is stroked with a cosmetic pen, so its true half-width in *scene* units grows without
@@ -317,6 +316,7 @@ class MemberResultItem(QGraphicsItem):
         self._max_abs_axial = max_abs_axial
         self._units = units
         self._colour = member_force_colour(result.axial, max_abs_axial)
+        self._view_scale = 1.0
         self._label = _ForceLabelItem(self._format_label(), self._colour, self)
         self._place_label()
 
@@ -359,6 +359,22 @@ class MemberResultItem(QGraphicsItem):
         self._label.set_content(self._format_label(), self._colour)
         self.update()
 
+    def update_view_scale(self, view_scale: float) -> None:
+        """Keep the bounding rect honest as the zoom changes.
+
+        Without this the declared bounds fall short of what is actually painted once zoomed
+        out, and Qt leaves repaint trails behind the band because it only refreshes the region
+        the item claimed.
+        """
+        if view_scale > 0.0 and view_scale != self._view_scale:
+            self.prepareGeometryChange()
+            self._view_scale = view_scale
+
+    @property
+    def _band_margin(self) -> float:
+        """Half the painted band width, in scene units, plus room for the label chip."""
+        return max(BAND_WIDTH_PX, LABEL_CLEARANCE_PX + 18.0) / self._view_scale
+
     def update_endpoints(self, p1: QPointF, p2: QPointF) -> None:
         """Follow the member after a node move. Scene coordinates, as in the constructor."""
         self.prepareGeometryChange()
@@ -386,10 +402,10 @@ class MemberResultItem(QGraphicsItem):
             QRectF(self._p1, self._p2)
             .normalized()
             .adjusted(
-                -BAND_MARGIN_SCENE,
-                -BAND_MARGIN_SCENE,
-                BAND_MARGIN_SCENE,
-                BAND_MARGIN_SCENE,
+                -self._band_margin,
+                -self._band_margin,
+                self._band_margin,
+                self._band_margin,
             )
         )
 

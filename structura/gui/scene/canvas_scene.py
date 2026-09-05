@@ -13,15 +13,20 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PySide6.QtCore import QPointF, QRectF, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen, QTransform
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 
+from ...core.analysis import AnalysisResult
 from ...core.model import Structure
+from ...core.units import UnitSystem
 from ..commands import MoveNodesCommand
 from ..document import Document
 from . import coords
 from .grid import choose_spacing, grid_lines
 from .items import MemberItem, NodeItem, PreviewLineItem
+from .items.load_item import LoadItem
+from .items.result_items import DiagramLegendItem, MemberResultItem, ReactionItem
+from .items.support_item import SupportItem
 from .snapping import SnapSettings
 
 COLOUR_BACKGROUND = QColor(250, 250, 248)
@@ -39,6 +44,9 @@ class CanvasScene(QGraphicsScene):
     snapHintChanged = Signal(str)
     """Short text for the status bar describing what the cursor is snapped to."""
 
+    sceneDoubleClicked = Signal(int)
+    """A member was double-clicked. Carries its id - the shortcut to member details."""
+
     viewScaleChanged = Signal(float)
     """The zoom changed. The status bar reads it; nothing else should need to."""
 
@@ -52,7 +60,14 @@ class CanvasScene(QGraphicsScene):
 
         self._node_items: dict[int, NodeItem] = {}
         self._member_items: dict[int, MemberItem] = {}
+        self._support_items: dict[int, SupportItem] = {}
+        self._load_items: dict[int, LoadItem] = {}
         self._drag_start: dict[int, tuple[float, float]] = {}
+
+        self._result_items: dict[int, MemberResultItem] = {}
+        self._reaction_items: dict[int, ReactionItem] = {}
+        self._legend: DiagramLegendItem | None = None
+        self._results_visible = True
 
         self.preview = PreviewLineItem()
         self.preview.hide()
@@ -109,7 +124,163 @@ class CanvasScene(QGraphicsScene):
                 node_j.attach_member(item)
                 item.update_geometry()
 
+        self._sync_supports(structure)
+        self._sync_loads(structure)
+        self._sync_result_geometry()
         self._update_scene_rect()
+
+    def _sync_supports(self, structure: Structure) -> None:
+        """Reconcile support symbols. A joint has at most one."""
+        for node_id in [n for n in self._support_items if n not in structure.supports]:
+            self.removeItem(self._support_items.pop(node_id))
+
+        for node_id, support in structure.supports.items():
+            node = structure.nodes.get(node_id)
+            if node is None:
+                continue
+            item = self._support_items.get(node_id)
+            if item is None:
+                item = SupportItem(node_id, support)
+                self._support_items[node_id] = item
+                self.addItem(item)
+            else:
+                item.update_support(support)
+            item.setPos(*coords.to_scene(node.x, node.y))
+
+    def _sync_loads(self, structure: Structure) -> None:
+        """Reconcile load arrows for the active load case.
+
+        Arrow length is relative to the largest load present, so the drawing stays readable
+        whether the model is expressed in newtons or meganewtons.
+        """
+        case = structure.active_load_case
+        by_node = {load.node_id: load for load in case.nodal if not load.is_zero}
+        reference = max(
+            (max(abs(load.fx), abs(load.fy)) for load in by_node.values()), default=0.0
+        )
+
+        for node_id in [n for n in self._load_items if n not in by_node]:
+            self.removeItem(self._load_items.pop(node_id))
+
+        for node_id, load in by_node.items():
+            node = structure.nodes.get(node_id)
+            if node is None:
+                continue
+            item = self._load_items.get(node_id)
+            if item is None:
+                item = LoadItem(node_id, load, reference)
+                self._load_items[node_id] = item
+                self.addItem(item)
+            else:
+                item.update_load(load, reference)
+            item.setPos(*coords.to_scene(node.x, node.y))
+
+    # ------------------------------------------------------------------ results
+
+    def show_results(self, result: AnalysisResult, units: UnitSystem) -> None:
+        """Draw member forces, reactions and the legend for a finished analysis."""
+        self.clear_results()
+        structure = self.structure
+        peak = result.max_abs_axial
+
+        for member_id, member_result in result.members.items():
+            member = structure.members.get(member_id)
+            if member is None:
+                continue
+            node_i = structure.nodes.get(member.node_i)
+            node_j = structure.nodes.get(member.node_j)
+            if node_i is None or node_j is None:
+                continue
+            item = MemberResultItem(
+                member_id,
+                QPointF(*coords.to_scene(node_i.x, node_i.y)),
+                QPointF(*coords.to_scene(node_j.x, node_j.y)),
+                member_result,
+                peak,
+                units,
+            )
+            item.update_view_scale(self.view_scale)
+            item.setVisible(self._results_visible)
+            self._result_items[member_id] = item
+            self.addItem(item)
+
+        peak_reaction = max((r.magnitude for r in result.reactions.values()), default=0.0)
+        for node_id, reaction in result.reactions.items():
+            node = structure.nodes.get(node_id)
+            if node is None:
+                continue
+            reaction_item = ReactionItem(node_id, reaction, peak_reaction, units)
+            reaction_item.setPos(*coords.to_scene(node.x, node.y))
+            reaction_item.setVisible(self._results_visible)
+            self._reaction_items[node_id] = reaction_item
+            self.addItem(reaction_item)
+
+        self._legend = DiagramLegendItem(peak, units)
+        self._legend.setVisible(self._results_visible)
+        self.addItem(self._legend)
+        self.place_legend()
+
+    def clear_results(self) -> None:
+        """Remove every result overlay, leaving the drawing itself untouched."""
+        for item in self._result_items.values():
+            self.removeItem(item)
+        for reaction_item in self._reaction_items.values():
+            self.removeItem(reaction_item)
+        self._result_items.clear()
+        self._reaction_items.clear()
+        if self._legend is not None:
+            self.removeItem(self._legend)
+            self._legend = None
+
+    def set_results_visible(self, visible: bool) -> None:
+        self._results_visible = visible
+        for item in self._result_items.values():
+            item.setVisible(visible)
+        for reaction_item in self._reaction_items.values():
+            reaction_item.setVisible(visible)
+        if self._legend is not None:
+            self._legend.setVisible(visible)
+
+    def set_results_stale(self, stale: bool) -> None:
+        """Fade the overlays once the model no longer matches the numbers on screen.
+
+        Fading rather than deleting is deliberate: the user can still see roughly what the last
+        run said while they finish editing, but nothing on screen looks authoritative.
+        """
+        opacity = 0.25 if stale else 1.0
+        for item in self._result_items.values():
+            item.setOpacity(opacity)
+        for reaction_item in self._reaction_items.values():
+            reaction_item.setOpacity(opacity)
+        if self._legend is not None:
+            self._legend.setOpacity(opacity)
+
+    def place_legend(self) -> None:
+        """Park the legend in the top-left corner of whatever is currently on screen."""
+        if self._legend is None:
+            return
+        views = self.views()
+        if not views:
+            return
+        corner = views[0].mapToScene(views[0].viewport().rect().topLeft())
+        margin = 12.0 / max(self.view_scale, 1e-9)
+        self._legend.setPos(corner.x() + margin, corner.y() + margin)
+
+    def _sync_result_geometry(self) -> None:
+        """Keep result bands attached to their members after a geometry edit."""
+        structure = self.structure
+        for member_id, item in list(self._result_items.items()):
+            member = structure.members.get(member_id)
+            if member is None:
+                self.removeItem(self._result_items.pop(member_id))
+                continue
+            node_i = structure.nodes.get(member.node_i)
+            node_j = structure.nodes.get(member.node_j)
+            if node_i is not None and node_j is not None:
+                item.update_endpoints(
+                    QPointF(*coords.to_scene(node_i.x, node_i.y)),
+                    QPointF(*coords.to_scene(node_j.x, node_j.y)),
+                )
 
     def _update_scene_rect(self) -> None:
         """Derive the scene rect from the *model*, not from ``itemsBoundingRect``.
@@ -132,6 +303,9 @@ class CanvasScene(QGraphicsScene):
         self.view_scale = scale
         for item in self._member_items.values():
             item.update_hit_width(scale)
+        for result_item in self._result_items.values():
+            result_item.update_view_scale(scale)
+        self.place_legend()
         self.viewScaleChanged.emit(scale)
         self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
 
@@ -211,6 +385,15 @@ class CanvasScene(QGraphicsScene):
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
 
     # ------------------------------------------------------------------ interaction
+
+    def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
+        """Double-clicking a member is the fastest route to its details."""
+        item = self.itemAt(event.scenePos(), QTransform())
+        if isinstance(item, MemberItem):
+            self.sceneDoubleClicked.emit(item.member_id)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         tool = self.tool

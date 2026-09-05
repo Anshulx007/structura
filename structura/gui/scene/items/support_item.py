@@ -226,7 +226,7 @@ class SupportItem(QGraphicsItem):
 
         if not self._stroke.isEmpty():
             painter.setPen(pen)
-            painter.setBrush(QBrush(QColor(Qt.GlobalColor.transparent)))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._stroke)
 
 

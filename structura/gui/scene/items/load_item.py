@@ -42,11 +42,20 @@ from . import COLOUR_NODE, NODE_Z
 LOAD_Z = NODE_Z - 1.0
 """Just under the joint dot, so the arrow tip never hides the node the user has to click."""
 
-COLOUR_LOAD = QColor(186, 54, 44)
-"""Loads are annotation over the structure, so they get their own ink rather than member grey."""
+COLOUR_LOAD = QColor(124, 58, 162)
+"""Applied loads are violet, deliberately not red.
 
-COLOUR_LOAD_LABEL = COLOUR_NODE
-"""Label text shares the node ink: red-on-white numerals at 8pt are hard to read."""
+Red is reserved for compression in the result overlay, and after an analysis both appear at
+once. Sharing the colour would make an input the user typed look like an output the solver
+computed. Violet is also clear of tension blue, reaction green, selection orange and the dark
+navy of joints. Loads are annotation over the structure, so they get their own ink rather than
+reusing member grey."""
+
+COLOUR_LOAD_LABEL = QColor(COLOUR_NODE)
+"""Label text uses the node ink, not the load ink: saturated numerals at 8pt are hard to read.
+
+Copied, not aliased - ``QColor`` is mutable and a shared instance would leak edits.
+"""
 
 LOAD_MAX_LENGTH_PX = 55.0
 """Device-pixel length given to the largest load in the model."""
@@ -310,7 +319,7 @@ class LoadItem(QGraphicsItem):
 
         if not self._stroke.isEmpty():
             painter.setPen(pen)
-            painter.setBrush(QBrush(QColor(Qt.GlobalColor.transparent)))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._stroke)
 
         if not self._fill.isEmpty():
