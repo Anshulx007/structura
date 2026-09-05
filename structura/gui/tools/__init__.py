@@ -10,13 +10,20 @@ expect. The scene converts the resulting drag into a single undo step.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 
 from ...core import geometry
-from ..commands import AddMemberCommand, AddNodeCommand
+from ...core.model import NodalLoad, Support, SupportType
+from ..commands import (
+    AddMemberCommand,
+    AddNodeCommand,
+    SetNodalLoadCommand,
+    SetSupportCommand,
+)
 from ..scene import coords
 from ..scene.snapping import SnapResult, snap_point
 
@@ -205,4 +212,115 @@ class MemberTool(Tool):
         self._start_node_id = end_id
 
 
-__all__ = ["MemberTool", "NodeTool", "SelectTool", "Tool"]
+class _JointTool(Tool):
+    """Shared behaviour for tools that act on an existing joint.
+
+    Neither supports nor loads may create geometry: attaching one to a joint the user did not
+    mean to create would be worse than doing nothing, so a click on empty space reports why it
+    was ignored instead of silently adding a node.
+    """
+
+    miss_hint = "Click directly on a joint."
+
+    def _joint_under(
+        self, scene: CanvasScene, event: QGraphicsSceneMouseEvent
+    ) -> int | None:
+        result = self._snap(scene, event)
+        if result.is_existing_node and result.node_id is not None:
+            return result.node_id
+        scene.snapHintChanged.emit(self.miss_hint)
+        return None
+
+
+class SupportTool(_JointTool):
+    """Apply supports. Clicking a joint that already has this support removes it."""
+
+    name = "support"
+
+    def __init__(self, support_type: SupportType = SupportType.PIN) -> None:
+        self.support_type = support_type
+
+    @property
+    def status_hint(self) -> str:  # type: ignore[override]
+        """Names the support currently selected, so the toolbar state is never ambiguous."""
+        return (
+            f"Click a joint to apply a {self.support_type.value.replace('_', ' ')} support. "
+            "Click again to remove it."
+        )
+
+    def mouse_press(self, scene: CanvasScene, event: QGraphicsSceneMouseEvent) -> bool:
+        if not self._is_left(event):
+            return False
+        node_id = self._joint_under(scene, event)
+        if node_id is None:
+            return True
+
+        existing = scene.structure.supports.get(node_id)
+        if existing is not None and existing.type is self.support_type:
+            support: Support | None = None  # toggle the same support off
+        else:
+            support = Support.from_type(node_id, self.support_type)
+
+        scene.document.push(SetSupportCommand(scene.document, node_id, support))
+        return True
+
+    def mouse_move(self, scene: CanvasScene, event: QGraphicsSceneMouseEvent) -> bool:
+        scene.snapHintChanged.emit(self._snap(scene, event).describe())
+        return False
+
+
+class LoadTool(_JointTool):
+    """Apply joint forces.
+
+    The value comes from ``prompt``, a callable the main window injects so the tool itself owns
+    no dialog code - that keeps it drivable from a test without a modal window appearing. When
+    no prompt is supplied the tool applies ``default_load``, which is what makes it usable
+    headlessly.
+    """
+
+    name = "load"
+    status_hint = "Click a joint to apply or edit a force."
+
+    def __init__(
+        self,
+        prompt: Callable[[NodalLoad], NodalLoad | None] | None = None,
+        default_load: NodalLoad | None = None,
+    ) -> None:
+        self.prompt = prompt
+        self.default_load = default_load or NodalLoad(0, fy=-10_000.0)
+
+    def mouse_press(self, scene: CanvasScene, event: QGraphicsSceneMouseEvent) -> bool:
+        if not self._is_left(event):
+            return False
+        node_id = self._joint_under(scene, event)
+        if node_id is None:
+            return True
+
+        case = scene.structure.active_load_case
+        existing = next((load for load in case.nodal if load.node_id == node_id), None)
+        current = existing or NodalLoad(
+            node_id, self.default_load.fx, self.default_load.fy, self.default_load.mz
+        )
+
+        wanted = self.prompt(current) if self.prompt is not None else current
+        if wanted is None:
+            return True  # the user cancelled
+
+        scene.document.push(
+            SetNodalLoadCommand(scene.document, node_id, wanted.fx, wanted.fy, wanted.mz)
+        )
+        return True
+
+    def mouse_move(self, scene: CanvasScene, event: QGraphicsSceneMouseEvent) -> bool:
+        scene.snapHintChanged.emit(self._snap(scene, event).describe())
+        return False
+
+
+__all__ = [
+    "LoadTool",
+    "MemberTool",
+    "NodeTool",
+    "SelectTool",
+    "SupportTool",
+    "Tool",
+]

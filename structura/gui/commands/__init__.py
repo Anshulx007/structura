@@ -15,7 +15,14 @@ from __future__ import annotations
 
 from PySide6.QtGui import QUndoCommand
 
-from ...core.model import AnalysisType, RemovalRecord, Structure
+from ...core.model import (
+    AnalysisType,
+    LoadCase,
+    NodalLoad,
+    RemovalRecord,
+    Structure,
+    Support,
+)
 from ..document import Document
 
 
@@ -227,6 +234,79 @@ class SetMemberPropertyCommand(ModelCommand):
         self._done()
 
 
+
+
+class SetSupportCommand(ModelCommand):
+    """Apply, change or remove the support at a joint.
+
+    A node has at most one support, so this replaces rather than accumulates. Passing ``None``
+    removes it, which is how the support tool implements click-to-toggle.
+    """
+
+    def __init__(self, document: Document, node_id: int, support: Support | None) -> None:
+        previous = document.structure.supports.get(node_id)
+        label = "Remove support" if support is None else f"Set {_support_name(support)} support"
+        super().__init__(document, label)
+        self._node_id = node_id
+        self._new = support
+        self._previous = previous
+
+    def redo(self) -> None:
+        self._apply(self._new)
+
+    def undo(self) -> None:
+        self._apply(self._previous)
+
+    def _apply(self, support: Support | None) -> None:
+        if support is None:
+            self.structure.remove_support(self._node_id)
+        elif self._node_id in self.structure.nodes:
+            self.structure.set_support(support)
+        self._done()
+
+
+def _support_name(support: Support) -> str:
+    return support.type.value.replace("_", " ")
+
+
+class SetNodalLoadCommand(ModelCommand):
+    """Replace the load applied at one joint in the active load case.
+
+    Replacing rather than appending keeps the model honest against the UI: the properties panel
+    shows *the* load at a joint, so two stacked loads at one node would make the displayed value
+    disagree with what the solver sees. A load of all zeros removes the entry entirely instead
+    of leaving a no-op record behind.
+    """
+
+    def __init__(
+        self, document: Document, node_id: int, fx: float = 0.0, fy: float = 0.0, mz: float = 0.0
+    ) -> None:
+        super().__init__(document, "Set joint load" if (fx or fy or mz) else "Remove joint load")
+        self._node_id = node_id
+        self._new = NodalLoad(node_id, fx, fy, mz)
+        case = document.structure.active_load_case
+        self._case_id = case.id
+        self._previous = [load for load in case.nodal if load.node_id == node_id]
+
+    def _case(self) -> LoadCase | None:
+        return self.structure.load_cases.get(self._case_id)
+
+    def redo(self) -> None:
+        case = self._case()
+        if case is not None:
+            case.nodal = [load for load in case.nodal if load.node_id != self._node_id]
+            if not self._new.is_zero:
+                case.nodal.append(self._new)
+        self._done()
+
+    def undo(self) -> None:
+        case = self._case()
+        if case is not None:
+            case.nodal = [load for load in case.nodal if load.node_id != self._node_id]
+            case.nodal.extend(self._previous)
+        self._done()
+
+
 __all__ = [
     "AddMemberCommand",
     "AddNodeCommand",
@@ -235,4 +315,6 @@ __all__ = [
     "MoveNodesCommand",
     "SetAnalysisTypeCommand",
     "SetMemberPropertyCommand",
+    "SetNodalLoadCommand",
+    "SetSupportCommand",
 ]
