@@ -117,16 +117,36 @@ def snap_point(
     if constrain_angle and anchor is not None:
         ax, ay = anchor
         cx, cy = _constrain_to_angle(ax, ay, x, y, settings.angle_step_degrees, grid_step)
-        return SnapResult(cx, cy, SnapKind.ANGLE)
+        return _as_node_if_coincident(structure, cx, cy, SnapKind.ANGLE, settings)
 
     if settings.to_grid and grid_step > 0.0:
-        return SnapResult(
+        return _as_node_if_coincident(
+            structure,
             round(x / grid_step) * grid_step,
             round(y / grid_step) * grid_step,
             SnapKind.GRID,
+            settings,
         )
 
-    return SnapResult(x, y, SnapKind.FREE)
+    return _as_node_if_coincident(structure, x, y, SnapKind.FREE, settings)
+
+
+def _as_node_if_coincident(
+    structure: Structure, x: float, y: float, kind: SnapKind, settings: SnapSettings
+) -> SnapResult:
+    """Report an existing joint when the *snapped* point has landed on one.
+
+    The node test earlier in ``snap_point`` measures from the raw cursor, which can be further
+    than the grab radius from a joint that the grid then rounds straight onto. Without this
+    second check the caller sees a plain grid hit and happily creates a second joint at
+    coordinates a joint already occupies - visually identical, structurally disconnected, and
+    a mechanism as far as the solver is concerned.
+    """
+    if settings.to_nodes:
+        existing = structure.node_at(x, y)
+        if existing is not None:
+            return SnapResult(existing.x, existing.y, SnapKind.NODE, node_id=existing.id)
+    return SnapResult(x, y, kind)
 
 
 def _nearest_node(structure: Structure, x: float, y: float, tolerance: float):  # type: ignore[no-untyped-def]

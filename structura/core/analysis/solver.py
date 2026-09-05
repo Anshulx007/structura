@@ -173,10 +173,15 @@ def _recover_reactions(
         support = structure.supports[node_id]
 
         moment_index = base + RZ
-        # In truss mode every rotation was auto-constrained; the value recovered there is
-        # identically zero and is not a physical reaction (conventions §3).
-        reports_moment = support.rz and not is_auto_constrained_rotation(
-            dof_map, moment_index, structure
+        # No truss element contributes rotational stiffness, so nothing can deliver a moment
+        # to a joint: in truss mode the value recovered at an rz DOF is identically zero
+        # whether that DOF was auto-constrained or the user asked for a fixed support
+        # (conventions §3). Reporting a "0.000" reaction moment there would imply a physical
+        # result that does not exist, so truss mode reports none at all.
+        reports_moment = (
+            structure.analysis_type is not AnalysisType.TRUSS
+            and support.rz
+            and not is_auto_constrained_rotation(dof_map, moment_index, structure)
         )
 
         reactions[node_id] = ReactionResult(

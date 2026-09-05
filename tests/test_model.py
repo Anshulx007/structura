@@ -11,7 +11,7 @@ from structura.core.model import AnalysisType, Structure, Support
 
 
 def test_ids_are_never_reused_after_deletion() -> None:
-    """Results are keyed by id, so a recycled id would silently attach old forces to new geometry."""
+    """Results are keyed by id: a recycled id would attach old forces to new geometry."""
     s = Structure()
     first = s.add_node(0.0, 0.0)
     second = s.add_node(1.0, 0.0)

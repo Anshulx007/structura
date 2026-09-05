@@ -12,15 +12,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from .. import geometry
 from ..units import DEFAULT as DEFAULT_UNITS
 from ..units import UnitSystem
 from .enums import AnalysisType
-from .load import MemberDistLoad, MemberMoment, MemberPointLoad, NodalLoad
+from .load import MemberDistLoad, MemberLoad, MemberMoment, MemberPointLoad, NodalLoad
 from .load_case import LoadCase, LoadCombination
 from .material import Material, Section
 from .member import Member, MemberGeometry
@@ -46,6 +46,35 @@ class _IdAllocator:
     def reserve(self, used: int) -> None:
         """Ensure future ids are greater than an id loaded from a file."""
         self.next_id = max(self.next_id, used + 1)
+
+
+@dataclass(slots=True)
+class RemovalRecord:
+    """Everything one delete operation took out, and enough to put it all back.
+
+    Deleting a node cascades - its members go, and with them their span loads, its support and
+    its nodal loads. Undo therefore cannot simply re-add a node: it needs the whole set. Load
+    entries carry their load-case id because a load only means something inside its case.
+    """
+
+    nodes: list[Node] = field(default_factory=list)
+    members: list[Member] = field(default_factory=list)
+    supports: list[Support] = field(default_factory=list)
+    nodal_loads: list[tuple[int, NodalLoad]] = field(default_factory=list)
+    member_loads: list[tuple[int, MemberLoad]] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.nodes or self.members or self.supports)
+
+    def summary(self) -> str:
+        """Short description for an undo-stack entry, e.g. ``"2 nodes, 3 members"``."""
+        parts: list[str] = []
+        if self.nodes:
+            parts.append(f"{len(self.nodes)} node{'s' if len(self.nodes) != 1 else ''}")
+        if self.members:
+            parts.append(f"{len(self.members)} member{'s' if len(self.members) != 1 else ''}")
+        return ", ".join(parts) if parts else "nothing"
 
 
 @dataclass
@@ -125,12 +154,7 @@ class Structure:
         member deletion, any span loads on those members. Undo restores all of it because the
         command captures the removed objects before calling this.
         """
-        for member_id in self.members_at_node(node_id):
-            self.delete_member(member_id)
-        self.supports.pop(node_id, None)
-        for case in self.load_cases.values():
-            case.remove_for_node(node_id)
-        self.nodes.pop(node_id, None)
+        self.remove(node_ids=[node_id])
 
     def members_at_node(self, node_id: int) -> list[int]:
         """Ids of every member with an end at this node."""
@@ -168,9 +192,7 @@ class Structure:
 
     def delete_member(self, member_id: int) -> None:
         """Delete a member and any loads applied along its span."""
-        for case in self.load_cases.values():
-            case.remove_for_member(member_id)
-        self.members.pop(member_id, None)
+        self.remove(member_ids=[member_id])
 
     def find_member(self, node_a: int, node_b: int) -> Member | None:
         """Return an existing member joining these two nodes, in either order."""
@@ -390,6 +412,68 @@ class Structure:
             return True
         c0, s0 = directions[0]
         return all(abs(c0 * s - s0 * c) < 1e-9 for c, s in directions[1:])
+
+    # ------------------------------------------------------------------ bulk edit / undo
+
+    def remove(
+        self, node_ids: Iterable[int] = (), member_ids: Iterable[int] = ()
+    ) -> RemovalRecord:
+        """Delete nodes and members, returning everything that was removed.
+
+        The caller gets a record rather than having to re-derive the cascade, which is what
+        makes undo reliable: whatever went out is exactly what comes back.
+        """
+        record = RemovalRecord()
+
+        doomed_members = {mid for mid in member_ids if mid in self.members}
+        doomed_nodes = {nid for nid in node_ids if nid in self.nodes}
+        for node_id in doomed_nodes:
+            doomed_members.update(self.members_at_node(node_id))
+
+        for member_id in sorted(doomed_members):
+            for case in self.load_cases.values():
+                for span_load in case.loads_on_member(member_id):
+                    record.member_loads.append((case.id, span_load))
+                case.remove_for_member(member_id)
+            record.members.append(self.members.pop(member_id))
+
+        for node_id in sorted(doomed_nodes):
+            support = self.supports.pop(node_id, None)
+            if support is not None:
+                record.supports.append(support)
+            for case in self.load_cases.values():
+                for nodal in case.nodal:
+                    if nodal.node_id == node_id:
+                        record.nodal_loads.append((case.id, nodal))
+                case.remove_for_node(node_id)
+            record.nodes.append(self.nodes.pop(node_id))
+
+        return record
+
+    def restore(self, record: RemovalRecord) -> None:
+        """Put back exactly what ``remove`` took out, with the same ids.
+
+        Nodes go back first: a member cannot be re-inserted before the joints it references
+        exist. Ids are *reserved*, never reallocated, so a restored object keeps the identity
+        that selection state and any analysis results still refer to.
+        """
+        for node in record.nodes:
+            self.nodes[node.id] = node
+            self._node_ids.reserve(node.id)
+        for member in record.members:
+            self.members[member.id] = member
+            self._member_ids.reserve(member.id)
+        for support in record.supports:
+            if support.node_id in self.nodes:
+                self.supports[support.node_id] = support
+        for case_id, nodal in record.nodal_loads:
+            case = self.load_cases.get(case_id)
+            if case is not None:
+                case.nodal.append(nodal)
+        for case_id, span_load in record.member_loads:
+            case = self.load_cases.get(case_id)
+            if case is not None:
+                case.add(span_load)
 
     # ------------------------------------------------------------------ serialisation
 

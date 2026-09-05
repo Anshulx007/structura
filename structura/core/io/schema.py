@@ -10,7 +10,8 @@ tolerant of missing optional keys so old files still open.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 CURRENT_VERSION = "1.0"
 
@@ -38,7 +39,8 @@ def validate_document(data: Any) -> None:
     """
     if not isinstance(data, dict):
         raise SchemaError(
-            f"Project file must contain a JSON object at the top level, found {type(data).__name__}."
+            "Project file must contain a JSON object at the top level, "
+            f"found {type(data).__name__}."
         )
 
     for key in _REQUIRED_TOP_LEVEL:

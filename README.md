@@ -32,8 +32,8 @@ units (N, m, Pa, rad).
 | 0 | Scaffolding, conventions contract | done |
 | 1 | Core model, validation, `.stru` file I/O | done |
 | 2 | Truss solver, diagnostics, CLI | done |
-| 3 | Drawing canvas (PySide6) | next |
-| 4 | Supports, loads, interactive truss analysis | |
+| 3 | Drawing canvas (PySide6) | done |
+| 4 | Supports, loads, interactive truss analysis | next |
 | 5 | Frame element, span loads, analytic diagrams | |
 | 6 | SFD/BMD in the GUI | |
 | 7 | Visualization polish | |
@@ -52,6 +52,21 @@ The GUI and reporting phases add their own dependencies:
 ```bash
 pip install -e ".[gui,report,dev]"
 ```
+
+PySide6 is pinned below 6.9. Anaconda ships `msvcp140.dll` 14.42 next to `python.exe`, and
+because Windows searches the executable's own directory first it shadows both the system copy
+and the newer one PySide6 bundles; Qt 6.9+ then fails to load with WinError 127. If Qt cannot
+start, `python -m structura.gui.app` explains this rather than printing a traceback.
+
+## Run the app
+
+```bash
+python -m structura.gui.app
+```
+
+Draw with **N** (joint) and **M** (member), select with **S**. Wheel zooms, middle-drag or
+space-drag pans, **Ctrl+0** fits. Shift constrains to 15 degree steps and snaps the length to
+the grid. File > Open example loads any of the validation structures.
 
 ## Run the checks
 

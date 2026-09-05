@@ -54,7 +54,7 @@ def test_round_trip_preserves_material_and_section_properties() -> None:
         assert restored.sections[key].area == pytest.approx(section.area)
         assert restored.sections[key].inertia == pytest.approx(section.inertia)
     for key, material in original.materials.items():
-        assert restored.materials[key].E == pytest.approx(material.E)
+        assert pytest.approx(material.E) == restored.materials[key].E
 
 
 def test_ids_do_not_collide_with_loaded_ones() -> None:

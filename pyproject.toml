@@ -37,7 +37,17 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
-ignore = ["N806"]  # allow K, T, ... matrix names in numerical code
+ignore = [
+    "N806",   # K, T, F ... are the right names for matrices in numerical code
+    "UP042",  # str+Enum is deliberate: it serialises to plain JSON without a custom encoder
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Qt dictates these names. Signals are camelCase and event handlers are fixed overrides;
+# renaming them would simply stop them working.
+"structura/gui/**" = ["N802", "N815"]
+# Matrix and DOF names follow the maths, not PEP 8 (K_ff, F_f, T).
+"structura/core/analysis/**" = ["N803"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -14,7 +14,7 @@ from .load_case import LoadCase, LoadCombination
 from .material import Material, Section
 from .member import Member, MemberGeometry
 from .node import Node
-from .structure import SCHEMA_VERSION, Structure
+from .structure import SCHEMA_VERSION, RemovalRecord, Structure
 from .support import Support
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "MemberState",
     "NodalLoad",
     "Node",
+    "RemovalRecord",
     "Section",
     "Severity",
     "Structure",

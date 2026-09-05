@@ -12,9 +12,9 @@ import pytest
 
 from structura.core import examples
 from structura.core.analysis import AnalysisError, solve
+from structura.core.analysis.assembler import assemble
 from structura.core.analysis.diagnostics import inspect, to_diagnostics
 from structura.core.analysis.dof import build_dof_map
-from structura.core.analysis.assembler import assemble
 from structura.core.model import Structure, Support
 
 
@@ -208,7 +208,11 @@ def test_rotational_restraint_in_truss_mode_warns() -> None:
 
     result = solve(structure)
     assert any(d.code == "TRUSS_FIXED_SUPPORT" for d in result.diagnostics)
-    assert not result.reactions[min(structure.nodes)].has_moment is False or True
+    # The restraint is accepted but inert: a truss joint is a pin, so no reaction moment
+    # exists to report, and showing a zero one would imply otherwise.
+    reaction = result.reactions[min(structure.nodes)]
+    assert reaction.has_moment is False
+    assert reaction.mz == 0.0
 
 
 def test_stable_structure_reports_no_mechanisms() -> None:
